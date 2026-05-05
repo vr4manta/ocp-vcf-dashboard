@@ -4,6 +4,7 @@ package server
 import (
 	"bytes"
 	"embed"
+	"fmt"
 	"html/template"
 	"net/http"
 	"sort"
@@ -13,6 +14,7 @@ import (
 	vcmv1 "github.com/openshift-splat-team/vsphere-capacity-manager/pkg/apis/vspherecapacitymanager.splat.io/v1"
 	"k8s.io/klog/v2"
 
+	"github.com/jcpowermac/ocp-vcf-dashboard/pkg/prometheus"
 	"github.com/jcpowermac/ocp-vcf-dashboard/pkg/prow"
 	"github.com/jcpowermac/ocp-vcf-dashboard/pkg/store"
 	"github.com/jcpowermac/ocp-vcf-dashboard/pkg/vcenter"
@@ -27,10 +29,11 @@ type Server struct {
 	templates  *template.Template
 	mux        *http.ServeMux
 	consoleURL string
+	promClient *prometheus.Client
 }
 
 // New creates a new dashboard HTTP server.
-func New(s *store.Store, consoleURL string) (*Server, error) {
+func New(s *store.Store, consoleURL string, promClient *prometheus.Client) (*Server, error) {
 	funcMap := template.FuncMap{
 		"pct": func(used, total int) float64 {
 			if total == 0 {
@@ -56,13 +59,7 @@ func New(s *store.Store, consoleURL string) (*Server, error) {
 			return strings.TrimSuffix(d.Truncate(24*time.Hour).String(), "0h0m0s")
 		},
 		"fmtPct": func(f float64) string {
-			return strings.TrimRight(strings.TrimRight(
-				strings.Replace(
-					template.JSEscapeString(
-						strings.TrimRight(strings.TrimRight(
-							func() string { return template.HTMLEscapeString("") }(), "0"), ".")),
-					"", "", 0),
-				"0"), ".")
+			return strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.1f", f), "0"), ".")
 		},
 		"poolServer": func(p *vcmv1.Pool) string {
 			return p.Spec.Server
@@ -149,40 +146,7 @@ func New(s *store.Store, consoleURL string) (*Server, error) {
 			return networks
 		},
 		"fmtFloat1": func(f float64) string {
-			s := strings.TrimRight(strings.TrimRight(
-				func() string {
-					r := []byte{}
-					r = append(r, []byte(func() string {
-						if f < 0 {
-							return "-"
-						}
-						return ""
-					}())...)
-					abs := f
-					if abs < 0 {
-						abs = -abs
-					}
-					whole := int64(abs)
-					frac := int64((abs - float64(whole)) * 10)
-					for _, b := range []byte(func() string {
-						s := ""
-						for whole > 0 {
-							s = string(rune('0'+whole%10)) + s
-							whole /= 10
-						}
-						if s == "" {
-							s = "0"
-						}
-						return s
-					}()) {
-						r = append(r, b)
-					}
-					r = append(r, '.')
-					r = append(r, byte('0'+frac))
-					return string(r)
-				}(),
-				"0"), ".")
-			return s
+			return strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.1f", f), "0"), ".")
 		},
 		"poolLeaseCount": func(poolName string, leases []*vcmv1.Lease) int {
 			count := 0
@@ -248,6 +212,7 @@ func New(s *store.Store, consoleURL string) (*Server, error) {
 		templates:  tmpl,
 		mux:        http.NewServeMux(),
 		consoleURL: consoleURL,
+		promClient: promClient,
 	}
 
 	srv.registerRoutes()
@@ -268,6 +233,9 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/pools/", s.handlePoolDetail)
 	s.mux.HandleFunc("/cluster/", s.handleClusterDetail)
 	s.mux.HandleFunc("/prow/", s.handleProwDetail)
+
+	// Graph API endpoints
+	s.mux.HandleFunc("/api/graph/pool/", s.handlePoolGraph)
 
 	// SSE endpoints
 	s.mux.HandleFunc("/api/sse/", s.handleSSE)

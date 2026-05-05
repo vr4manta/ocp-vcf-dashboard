@@ -4,14 +4,11 @@ package k8s
 
 import (
 	"context"
-	"fmt"
 	"time"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/tools/cache"
@@ -175,8 +172,3 @@ func (w *Watcher) handleNetwork(obj interface{}) {
 
 	w.store.SetNetwork(&network)
 }
-
-// Ensure interfaces are satisfied at compile time
-var _ watch.Interface = nil
-var _ = metav1.ListOptions{}
-var _ = fmt.Sprintf

@@ -49,6 +49,32 @@
     </div>
 </div>
 
+<div class="detail-section">
+    <h2>Resource Usage Over Time</h2>
+    <div class="range-selector">
+        <button class="range-btn" data-range="1h">1h</button>
+        <button class="range-btn" data-range="6h">6h</button>
+        <button class="range-btn active" data-range="24h">24h</button>
+        <button class="range-btn" data-range="7d">7d</button>
+    </div>
+    <div id="pool-charts" data-pool="{{.Pool.Name}}" data-range="24h">
+        <div class="chart-row">
+            <div class="chart-container">
+                <h3>CPU Utilization (%)</h3>
+                <div id="cpu-chart"></div>
+            </div>
+            <div class="chart-container">
+                <h3>Memory Utilization (%)</h3>
+                <div id="memory-chart"></div>
+            </div>
+        </div>
+        <div class="chart-legend">
+            <span class="legend-item"><span class="legend-swatch legend-pool"></span>Pool Allocation</span>
+            <span class="legend-item"><span class="legend-swatch legend-cluster"></span>Cluster Demand</span>
+        </div>
+    </div>
+</div>
+
 {{if .Leases}}
 <div class="detail-section">
     <h2>Assigned Leases ({{len .Leases}})</h2>

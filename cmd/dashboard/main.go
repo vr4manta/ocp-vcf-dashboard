@@ -20,6 +20,7 @@ import (
 
 	"github.com/jcpowermac/ocp-vcf-dashboard/pkg/config"
 	k8swatcher "github.com/jcpowermac/ocp-vcf-dashboard/pkg/k8s"
+	"github.com/jcpowermac/ocp-vcf-dashboard/pkg/prometheus"
 	"github.com/jcpowermac/ocp-vcf-dashboard/pkg/prow"
 	"github.com/jcpowermac/ocp-vcf-dashboard/pkg/server"
 	"github.com/jcpowermac/ocp-vcf-dashboard/pkg/store"
@@ -29,12 +30,15 @@ import (
 
 func main() {
 	var (
-		listenAddr          string
-		secretNamespace     string
-		configName          string
-		consoleURL          string
-		prowPollInterval    time.Duration
-		vcenterPollInterval time.Duration
+		listenAddr              string
+		secretNamespace         string
+		configName              string
+		consoleURL              string
+		prowPollInterval        time.Duration
+		vcenterPollInterval     time.Duration
+		prometheusURL           string
+		prometheusTokenPath     string
+		prometheusSkipTLSVerify bool
 	)
 
 	flag.StringVar(&listenAddr, "listen-address", ":8080", "Address to listen on for the web UI")
@@ -43,6 +47,9 @@ func main() {
 	flag.StringVar(&consoleURL, "console-url", "https://console-openshift-console.apps.build02.vmc.ci.openshift.org", "OpenShift console base URL for namespace links")
 	flag.DurationVar(&prowPollInterval, "prow-poll-interval", 5*time.Minute, "How often to refresh Prow job data")
 	flag.DurationVar(&vcenterPollInterval, "vcenter-poll-interval", 5*time.Minute, "How often to poll vCenter data (0 to disable)")
+	flag.StringVar(&prometheusURL, "prometheus-url", "https://thanos-querier.openshift-monitoring.svc:9091", "Prometheus/Thanos query endpoint")
+	flag.StringVar(&prometheusTokenPath, "prometheus-token-path", "", "Path to bearer token file (defaults to SA token)")
+	flag.BoolVar(&prometheusSkipTLSVerify, "prometheus-skip-tls-verify", true, "Skip TLS certificate verification for Prometheus")
 
 	klog.InitFlags(nil)
 	flag.Parse()
@@ -105,6 +112,13 @@ func main() {
 		klog.Fatalf("Failed to create vSphere metadata: %v", err)
 	}
 
+	// Initialize Prometheus client
+	var promClient *prometheus.Client
+	if prometheusURL != "" {
+		promClient = prometheus.New(prometheusURL, prometheusTokenPath, prometheusSkipTLSVerify)
+		klog.Infof("Prometheus client configured for %s", prometheusURL)
+	}
+
 	// Initialize in-memory store
 	dataStore := store.New()
 
@@ -127,6 +141,7 @@ func main() {
 		collector := vcenter.NewCollector(metadata, vcenterPollInterval)
 		go collector.Run(ctx, func(srv string, data *vcenter.VCenterData) {
 			dataStore.SetVCenterData(srv, data)
+			dataStore.RecordClusterStats(srv, data.Clusters)
 		})
 		klog.Infof("vCenter collection enabled with %v interval", vcenterPollInterval)
 	} else {
@@ -134,7 +149,7 @@ func main() {
 	}
 
 	// Create and start HTTP server
-	srv, err := server.New(dataStore, consoleURL)
+	srv, err := server.New(dataStore, consoleURL, promClient)
 	if err != nil {
 		klog.Fatalf("Failed to create HTTP server: %v", err)
 	}
