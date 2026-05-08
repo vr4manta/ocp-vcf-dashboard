@@ -45,8 +45,13 @@
             return;
         }
 
-        var hasPool = series.pool_used_pct && series.pool_used_pct.some(function(v) { return v !== null; });
-        var hasCluster = series.cluster_demand_pct && series.cluster_demand_pct.some(function(v) { return v !== null; });
+        var hasPool = series.pool_used_pct && series.pool_used_pct.length > 0;
+        var hasCluster = series.cluster_demand_pct && series.cluster_demand_pct.length > 0;
+
+        if (!hasPool && !hasCluster) {
+            el.innerHTML = "<p class='chart-empty'>No data available</p>";
+            return;
+        }
 
         var timestamps = series.timestamps;
         var chartData = [timestamps];
@@ -58,7 +63,7 @@
                 label: "Pool Allocation",
                 stroke: colors.poolLine,
                 width: 2,
-                spanGaps: true
+                points: { show: false }
             });
         }
 
@@ -68,13 +73,8 @@
                 label: "Cluster Demand",
                 stroke: colors.clusterLine,
                 width: 2,
-                spanGaps: true
+                points: { show: false }
             });
-        }
-
-        if (!hasPool && !hasCluster) {
-            el.innerHTML = "<p class='chart-empty'>No data available</p>";
-            return;
         }
 
         var width = el.clientWidth || 500;
@@ -95,6 +95,7 @@
                 {
                     label: label + " Utilization (%)",
                     labelSize: 20,
+                    labelGap: 4,
                     stroke: colors.axes,
                     grid: { stroke: colors.grid, width: 1 },
                     ticks: { stroke: colors.grid, width: 1 },

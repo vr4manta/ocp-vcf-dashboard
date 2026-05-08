@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
-	"sort"
 	"strings"
 	"time"
 
@@ -26,11 +26,10 @@ type GraphResponse struct {
 }
 
 // GraphSeries holds aligned time series data for a resource type.
-// Nil float64 pointers encode as JSON null so uPlot renders gaps.
 type GraphSeries struct {
-	Timestamps       []int64    `json:"timestamps"`
-	PoolUsedPct      []*float64 `json:"pool_used_pct"`
-	ClusterDemandPct []*float64 `json:"cluster_demand_pct"`
+	Timestamps       []int64   `json:"timestamps"`
+	PoolUsedPct      []float64 `json:"pool_used_pct"`
+	ClusterDemandPct []float64 `json:"cluster_demand_pct"`
 }
 
 func (s *Server) handlePoolGraph(w http.ResponseWriter, r *http.Request) {
@@ -73,19 +72,17 @@ func (s *Server) handlePoolGraph(w http.ResponseWriter, r *http.Request) {
 	var promCPU, promMem []tsVal
 	var clusterCPU, clusterMem []tsVal
 
-	// Query Prometheus for pool metrics
 	if s.promClient != nil {
 		promCPU, promMem = s.queryPoolMetrics(r.Context(), poolName, start, now, step)
 	}
 
-	// Query vSphere historical performance for cluster demand
 	if clusterName != "" && s.metadata != nil {
 		clusterCPU, clusterMem = s.queryClusterPerfMetrics(r.Context(), server, clusterName, start, now, rangeParam)
 	}
 
-	// Build aligned timestamp grids for CPU and Memory
-	resp.CPU = alignSeries(promCPU, clusterCPU)
-	resp.Memory = alignSeries(promMem, clusterMem)
+	stepSec := int64(step.Seconds())
+	resp.CPU = buildSeries(start.Unix(), now.Unix(), stepSec, promCPU, clusterCPU)
+	resp.Memory = buildSeries(start.Unix(), now.Unix(), stepSec, promMem, clusterMem)
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
@@ -93,58 +90,89 @@ func (s *Server) handlePoolGraph(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// alignSeries merges two independent time-series onto a shared timestamp grid.
-func alignSeries(pool, cluster []tsVal) GraphSeries {
-	tsSet := make(map[int64]struct{})
-	for _, p := range pool {
-		tsSet[p.ts] = struct{}{}
-	}
-	for _, p := range cluster {
-		tsSet[p.ts] = struct{}{}
-	}
+type tsVal struct {
+	ts  int64
+	val float64
+}
 
-	if len(tsSet) == 0 {
+// buildSeries generates a regular timestamp grid and snaps both data sources
+// onto it using nearest-neighbor matching (within step/2 tolerance).
+func buildSeries(startUnix, endUnix, stepSec int64, pool, cluster []tsVal) GraphSeries {
+	if len(pool) == 0 && len(cluster) == 0 {
 		return GraphSeries{}
 	}
 
-	timestamps := make([]int64, 0, len(tsSet))
-	for ts := range tsSet {
-		timestamps = append(timestamps, ts)
+	// Generate regular timestamp grid aligned to step
+	gridStart := (startUnix / stepSec) * stepSec
+	if gridStart < startUnix {
+		gridStart += stepSec
 	}
-	sort.Slice(timestamps, func(i, j int) bool { return timestamps[i] < timestamps[j] })
 
-	poolMap := make(map[int64]float64, len(pool))
-	for _, p := range pool {
-		poolMap[p.ts] = p.val
+	n := int((endUnix-gridStart)/stepSec) + 1
+	if n <= 0 {
+		return GraphSeries{}
 	}
-	clusterMap := make(map[int64]float64, len(cluster))
-	for _, p := range cluster {
-		clusterMap[p.ts] = p.val
+
+	timestamps := make([]int64, n)
+	for i := range timestamps {
+		timestamps[i] = gridStart + int64(i)*stepSec
+	}
+
+	tolerance := stepSec / 2
+	if tolerance < 1 {
+		tolerance = 1
 	}
 
 	series := GraphSeries{
-		Timestamps:       timestamps,
-		PoolUsedPct:      make([]*float64, len(timestamps)),
-		ClusterDemandPct: make([]*float64, len(timestamps)),
+		Timestamps: timestamps,
 	}
 
-	for i, ts := range timestamps {
-		if v, ok := poolMap[ts]; ok {
-			val := v
-			series.PoolUsedPct[i] = &val
-		}
-		if v, ok := clusterMap[ts]; ok {
-			val := v
-			series.ClusterDemandPct[i] = &val
-		}
+	if len(pool) > 0 {
+		series.PoolUsedPct = snapToGrid(timestamps, pool, tolerance)
+	}
+	if len(cluster) > 0 {
+		series.ClusterDemandPct = snapToGrid(timestamps, cluster, tolerance)
 	}
 
 	return series
 }
 
-type tsVal struct {
-	ts  int64
-	val float64
+// snapToGrid maps irregular source data onto a regular grid using nearest-neighbor.
+// For each grid timestamp, it finds the nearest source point within tolerance.
+// Points outside tolerance get the last known value (step interpolation).
+func snapToGrid(grid []int64, src []tsVal, tolerance int64) []float64 {
+	out := make([]float64, len(grid))
+	srcIdx := 0
+	lastVal := math.NaN()
+
+	for i, gt := range grid {
+		// Advance source index to the closest point to this grid time
+		for srcIdx < len(src)-1 {
+			currDist := abs64(src[srcIdx].ts - gt)
+			nextDist := abs64(src[srcIdx+1].ts - gt)
+			if nextDist > currDist {
+				break
+			}
+			srcIdx++
+		}
+
+		if srcIdx < len(src) && abs64(src[srcIdx].ts-gt) <= tolerance {
+			lastVal = src[srcIdx].val
+		}
+
+		if !math.IsNaN(lastVal) {
+			out[i] = lastVal
+		}
+	}
+
+	return out
+}
+
+func abs64(x int64) int64 {
+	if x < 0 {
+		return -x
+	}
+	return x
 }
 
 // queryPoolMetrics fetches pool allocation percentages from Prometheus.
