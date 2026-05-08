@@ -534,35 +534,6 @@ a:hover { text-decoration: underline; }
     padding: 60px 0;
 }
 
-.chart-legend {
-    display: flex;
-    gap: 16px;
-    justify-content: center;
-    margin-top: 8px;
-    font-size: 12px;
-    color: var(--pf-text-secondary);
-}
-
-.legend-item {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-}
-
-.legend-swatch {
-    display: inline-block;
-    width: 12px;
-    height: 3px;
-    border-radius: 1px;
-}
-
-.legend-pool {
-    background: #2b9af3;
-}
-
-.legend-cluster {
-    background: #ec7a08;
-}
 
 /* uPlot dark theme overrides */
 .uplot {
@@ -571,6 +542,31 @@ a:hover { text-decoration: underline; }
 
 .u-wrap {
     background: transparent !important;
+}
+
+.u-legend {
+    text-align: left;
+    font-size: 12px;
+    padding: 4px 0;
+}
+
+.u-legend .u-series {
+    padding: 2px 0;
+}
+
+.u-legend .u-series th {
+    color: var(--pf-text-secondary);
+    font-weight: 400;
+}
+
+.u-legend .u-series td {
+    color: var(--pf-text-primary);
+    font-weight: 600;
+    padding-left: 4px;
+}
+
+.u-legend .u-series.u-off th {
+    color: var(--pf-text-muted);
 }
 
 /* Responsive */

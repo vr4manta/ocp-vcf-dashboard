@@ -39,10 +39,6 @@ type Store struct {
 	vcenterData    map[string]*vcenter.VCenterData
 	vcenterUpdated time.Time
 
-	// clusterHistory stores time-series data for vSphere clusters.
-	// Key format: "server:clusterName"
-	clusterHistory map[string]*ClusterHistory
-
 	// subscribers receive event types when data changes
 	subMu       sync.Mutex
 	subscribers map[chan EventType]struct{}
@@ -51,12 +47,11 @@ type Store struct {
 // New creates a new empty Store.
 func New() *Store {
 	return &Store{
-		pools:          make(map[string]*vcmv1.Pool),
-		leases:         make(map[string]*vcmv1.Lease),
-		networks:       make(map[string]*vcmv1.Network),
-		vcenterData:    make(map[string]*vcenter.VCenterData),
-		clusterHistory: make(map[string]*ClusterHistory),
-		subscribers:    make(map[chan EventType]struct{}),
+		pools:       make(map[string]*vcmv1.Pool),
+		leases:      make(map[string]*vcmv1.Lease),
+		networks:    make(map[string]*vcmv1.Network),
+		vcenterData: make(map[string]*vcenter.VCenterData),
+		subscribers: make(map[chan EventType]struct{}),
 	}
 }
 

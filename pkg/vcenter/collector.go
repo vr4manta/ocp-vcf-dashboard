@@ -35,6 +35,8 @@ type VCenterData struct {
 // ClusterInfo holds cluster-level resource and DRS information.
 type ClusterInfo struct {
 	Name              string `json:"name"`
+	MoRef             string `json:"moref"`
+	MoRefType         string `json:"moref_type"`
 	NumHosts          int32  `json:"num_hosts"`
 	NumEffectiveHosts int32  `json:"num_effective_hosts"`
 	TotalCPUCores     int16  `json:"total_cpu_cores"`
@@ -174,7 +176,9 @@ func collectClusters(ctx context.Context, c *vim25.Client) ([]ClusterInfo, error
 	var result []ClusterInfo
 	for _, cl := range clusters {
 		info := ClusterInfo{
-			Name: cl.Name,
+			Name:      cl.Name,
+			MoRef:     cl.Self.Value,
+			MoRefType: cl.Self.Type,
 		}
 
 		if s := cl.Summary.GetComputeResourceSummary(); s != nil {

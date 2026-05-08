@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	vcmv1 "github.com/openshift-splat-team/vsphere-capacity-manager/pkg/apis/vspherecapacitymanager.splat.io/v1"
@@ -18,6 +19,7 @@ import (
 	"github.com/jcpowermac/ocp-vcf-dashboard/pkg/prow"
 	"github.com/jcpowermac/ocp-vcf-dashboard/pkg/store"
 	"github.com/jcpowermac/ocp-vcf-dashboard/pkg/vcenter"
+	"github.com/jcpowermac/ocp-vcf-dashboard/pkg/vsphere"
 )
 
 //go:embed views/*.html
@@ -30,10 +32,14 @@ type Server struct {
 	mux        *http.ServeMux
 	consoleURL string
 	promClient *prometheus.Client
+	metadata   *vsphere.Metadata
+
+	perfMu      sync.Mutex
+	perfClients map[string]*vcenter.PerfClient
 }
 
 // New creates a new dashboard HTTP server.
-func New(s *store.Store, consoleURL string, promClient *prometheus.Client) (*Server, error) {
+func New(s *store.Store, consoleURL string, promClient *prometheus.Client, metadata *vsphere.Metadata) (*Server, error) {
 	funcMap := template.FuncMap{
 		"pct": func(used, total int) float64 {
 			if total == 0 {
@@ -208,11 +214,13 @@ func New(s *store.Store, consoleURL string, promClient *prometheus.Client) (*Ser
 	}
 
 	srv := &Server{
-		store:      s,
-		templates:  tmpl,
-		mux:        http.NewServeMux(),
-		consoleURL: consoleURL,
-		promClient: promClient,
+		store:       s,
+		templates:   tmpl,
+		mux:         http.NewServeMux(),
+		consoleURL:  consoleURL,
+		promClient:  promClient,
+		metadata:    metadata,
+		perfClients: make(map[string]*vcenter.PerfClient),
 	}
 
 	srv.registerRoutes()

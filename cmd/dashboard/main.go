@@ -141,7 +141,6 @@ func main() {
 		collector := vcenter.NewCollector(metadata, vcenterPollInterval)
 		go collector.Run(ctx, func(srv string, data *vcenter.VCenterData) {
 			dataStore.SetVCenterData(srv, data)
-			dataStore.RecordClusterStats(srv, data.Clusters)
 		})
 		klog.Infof("vCenter collection enabled with %v interval", vcenterPollInterval)
 	} else {
@@ -149,7 +148,7 @@ func main() {
 	}
 
 	// Create and start HTTP server
-	srv, err := server.New(dataStore, consoleURL, promClient)
+	srv, err := server.New(dataStore, consoleURL, promClient, metadata)
 	if err != nil {
 		klog.Fatalf("Failed to create HTTP server: %v", err)
 	}
