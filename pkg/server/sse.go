@@ -5,11 +5,14 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"k8s.io/klog/v2"
 
 	"github.com/jcpowermac/ocp-vcf-dashboard/pkg/store"
 )
+
+const sseDebounce = 500 * time.Millisecond
 
 // handleSSE handles Server-Sent Event connections for real-time updates.
 // Clients connect to /api/sse/{resource} where resource is one of:
@@ -55,17 +58,29 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	// Send initial data
 	s.sendSSEFragment(w, flusher, resource)
 
+	pending := false
+	timer := time.NewTimer(sseDebounce)
+	timer.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return
 		case evt, ok := <-sub:
 			if !ok {
+				timer.Stop()
 				return
 			}
-			if evt == eventType || evt == store.EventOverview && resource == "overview" {
-				s.sendSSEFragment(w, flusher, resource)
+			if evt == eventType || (evt == store.EventOverview && resource == "overview") {
+				if !pending {
+					timer.Reset(sseDebounce)
+					pending = true
+				}
 			}
+		case <-timer.C:
+			s.sendSSEFragment(w, flusher, resource)
+			pending = false
 		}
 	}
 }

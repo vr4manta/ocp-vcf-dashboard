@@ -100,6 +100,103 @@ func TestStoreVCenter(t *testing.T) {
 	}
 }
 
+func TestSetPoolNoNotifyOnSameVersion(t *testing.T) {
+	s := New()
+	ch := s.Subscribe()
+
+	pool := &vcmv1.Pool{
+		ObjectMeta: metav1.ObjectMeta{Name: "p1", ResourceVersion: "100"},
+	}
+	s.SetPool(pool)
+	drainChannel(ch)
+
+	s.SetPool(pool)
+
+	select {
+	case <-ch:
+		t.Error("expected no notification for unchanged ResourceVersion")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	s.Unsubscribe(ch)
+}
+
+func TestSetLeaseNoNotifyOnSameVersion(t *testing.T) {
+	s := New()
+	ch := s.Subscribe()
+
+	lease := &vcmv1.Lease{
+		ObjectMeta: metav1.ObjectMeta{Name: "l1", ResourceVersion: "200"},
+	}
+	s.SetLease(lease)
+	drainChannel(ch)
+
+	s.SetLease(lease)
+
+	select {
+	case <-ch:
+		t.Error("expected no notification for unchanged ResourceVersion")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	s.Unsubscribe(ch)
+}
+
+func TestSetNetworkNoNotifyOnSameVersion(t *testing.T) {
+	s := New()
+	ch := s.Subscribe()
+
+	network := &vcmv1.Network{
+		ObjectMeta: metav1.ObjectMeta{Name: "n1", ResourceVersion: "300"},
+	}
+	s.SetNetwork(network)
+	drainChannel(ch)
+
+	s.SetNetwork(network)
+
+	select {
+	case <-ch:
+		t.Error("expected no notification for unchanged ResourceVersion")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	s.Unsubscribe(ch)
+}
+
+func TestSetPoolNotifiesOnNewVersion(t *testing.T) {
+	s := New()
+	ch := s.Subscribe()
+
+	s.SetPool(&vcmv1.Pool{
+		ObjectMeta: metav1.ObjectMeta{Name: "p1", ResourceVersion: "100"},
+	})
+	drainChannel(ch)
+
+	s.SetPool(&vcmv1.Pool{
+		ObjectMeta: metav1.ObjectMeta{Name: "p1", ResourceVersion: "101"},
+	})
+
+	timer := time.NewTimer(1 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-ch:
+	case <-timer.C:
+		t.Error("expected notification for changed ResourceVersion")
+	}
+
+	s.Unsubscribe(ch)
+}
+
+func drainChannel(ch chan EventType) {
+	for {
+		select {
+		case <-ch:
+		default:
+			return
+		}
+	}
+}
+
 func TestStoreSubscribe(t *testing.T) {
 	s := New()
 	ch := s.Subscribe()

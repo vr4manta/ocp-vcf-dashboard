@@ -96,6 +96,12 @@ func (s *Store) notify(events ...EventType) {
 
 func (s *Store) SetPool(pool *vcmv1.Pool) {
 	s.mu.Lock()
+	if existing, ok := s.pools[pool.Name]; ok {
+		if existing.ResourceVersion == pool.ResourceVersion {
+			s.mu.Unlock()
+			return
+		}
+	}
 	s.pools[pool.Name] = pool.DeepCopy()
 	s.mu.Unlock()
 	s.notify(EventPools, EventOverview)
@@ -132,6 +138,12 @@ func (s *Store) GetPool(name string) *vcmv1.Pool {
 
 func (s *Store) SetLease(lease *vcmv1.Lease) {
 	s.mu.Lock()
+	if existing, ok := s.leases[lease.Name]; ok {
+		if existing.ResourceVersion == lease.ResourceVersion {
+			s.mu.Unlock()
+			return
+		}
+	}
 	s.leases[lease.Name] = lease.DeepCopy()
 	s.mu.Unlock()
 	s.notify(EventLeases, EventOverview)
@@ -199,6 +211,12 @@ func (s *Store) GetLeasesByJobName(jobName string) []*vcmv1.Lease {
 
 func (s *Store) SetNetwork(network *vcmv1.Network) {
 	s.mu.Lock()
+	if existing, ok := s.networks[network.Name]; ok {
+		if existing.ResourceVersion == network.ResourceVersion {
+			s.mu.Unlock()
+			return
+		}
+	}
 	s.networks[network.Name] = network.DeepCopy()
 	s.mu.Unlock()
 	s.notify(EventNetworks, EventOverview)
