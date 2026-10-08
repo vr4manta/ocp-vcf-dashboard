@@ -10,7 +10,8 @@
             <th>Region</th>
             <th>vCPUs</th>
             <th>Memory (GB)</th>
-            <th>Networks</th>
+            <th>ST Network</th>
+            <th>MT Network</th>
             <th>Leases</th>
             <th>Status</th>
         </tr>
@@ -41,7 +42,24 @@
                     <span class="progress-text">{{sub .Spec.Memory .Status.MemoryAvailable}}/{{.Spec.Memory}}</span>
                 </div>
             </td>
-            <td>{{.Status.NetworkAvailable}}</td>
+            <td>
+                <div class="progress-cell">
+                    <div class="progress-bar">
+                        <div class="progress-fill {{if gt (pct (sub .Status.SingleTenantNetworksTotal .Status.SingleTenantNetworksAvailable) .Status.SingleTenantNetworksTotal) 80.0}}progress-danger{{else if gt (pct (sub .Status.SingleTenantNetworksTotal .Status.SingleTenantNetworksAvailable) .Status.SingleTenantNetworksTotal) 60.0}}progress-warning{{else}}progress-ok{{end}}"
+                             style="width: {{pct (sub .Status.SingleTenantNetworksTotal .Status.SingleTenantNetworksAvailable) .Status.SingleTenantNetworksTotal}}%"></div>
+                    </div>
+                    <span class="progress-text">{{sub .Status.SingleTenantNetworksTotal .Status.SingleTenantNetworksAvailable}}/{{.Status.SingleTenantNetworksTotal}}</span>
+                </div>
+            </td>
+            <td>
+                <div class="progress-cell">
+                    <div class="progress-bar">
+                        <div class="progress-fill {{if gt (pct (sub .Status.MultiTenantNetworksTotal .Status.MultiTenantNetworksAvailable) .Status.MultiTenantNetworksTotal) 80.0}}progress-danger{{else if gt (pct (sub .Status.MultiTenantNetworksTotal .Status.MultiTenantNetworksAvailable) .Status.MultiTenantNetworksTotal) 60.0}}progress-warning{{else}}progress-ok{{end}}"
+                             style="width: {{pct (sub .Status.MultiTenantNetworksTotal .Status.MultiTenantNetworksAvailable) .Status.MultiTenantNetworksTotal}}%"></div>
+                    </div>
+                    <span class="progress-text">{{sub .Status.MultiTenantNetworksTotal .Status.MultiTenantNetworksAvailable}}/{{.Status.MultiTenantNetworksTotal}}</span>
+                </div>
+            </td>
             <td>{{poolLeaseCount .Name $leases}}</td>
             <td>
                 {{if .Spec.Exclude}}

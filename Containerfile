@@ -16,7 +16,6 @@ WORKDIR /
 
 COPY --from=builder /workspace/ocp-vcf-dashboard .
 COPY --from=builder /workspace/static/ /static/
-COPY --from=builder /workspace/pkg/views/ /pkg/views/
 
 USER 65532:65532
 

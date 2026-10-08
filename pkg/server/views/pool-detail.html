@@ -44,7 +44,24 @@
                     <span class="progress-text">{{sub .Pool.Spec.Memory .Pool.Status.MemoryAvailable}}/{{.Pool.Spec.Memory}} GB used</span>
                 </div>
             </td></tr>
-            <tr><th>Networks Available</th><td>{{.Pool.Status.NetworkAvailable}}</td></tr>
+            <tr><th>ST Network</th><td>
+                <div class="progress-cell">
+                    <div class="progress-bar">
+                        <div class="progress-fill {{if gt (pct (sub .Pool.Status.SingleTenantNetworksTotal .Pool.Status.SingleTenantNetworksAvailable) .Pool.Status.SingleTenantNetworksTotal) 80.0}}progress-danger{{else if gt (pct (sub .Pool.Status.SingleTenantNetworksTotal .Pool.Status.SingleTenantNetworksAvailable) .Pool.Status.SingleTenantNetworksTotal) 60.0}}progress-warning{{else}}progress-ok{{end}}"
+                             style="width: {{pct (sub .Pool.Status.SingleTenantNetworksTotal .Pool.Status.SingleTenantNetworksAvailable) .Pool.Status.SingleTenantNetworksTotal}}%"></div>
+                    </div>
+                    <span class="progress-text">{{sub .Pool.Status.SingleTenantNetworksTotal .Pool.Status.SingleTenantNetworksAvailable}}/{{.Pool.Status.SingleTenantNetworksTotal}} used</span>
+                </div>
+            </td></tr>
+            <tr><th>MT Network</th><td>
+                <div class="progress-cell">
+                    <div class="progress-bar">
+                        <div class="progress-fill {{if gt (pct (sub .Pool.Status.MultiTenantNetworksTotal .Pool.Status.MultiTenantNetworksAvailable) .Pool.Status.MultiTenantNetworksTotal) 80.0}}progress-danger{{else if gt (pct (sub .Pool.Status.MultiTenantNetworksTotal .Pool.Status.MultiTenantNetworksAvailable) .Pool.Status.MultiTenantNetworksTotal) 60.0}}progress-warning{{else}}progress-ok{{end}}"
+                             style="width: {{pct (sub .Pool.Status.MultiTenantNetworksTotal .Pool.Status.MultiTenantNetworksAvailable) .Pool.Status.MultiTenantNetworksTotal}}%"></div>
+                    </div>
+                    <span class="progress-text">{{sub .Pool.Status.MultiTenantNetworksTotal .Pool.Status.MultiTenantNetworksAvailable}}/{{.Pool.Status.MultiTenantNetworksTotal}} used</span>
+                </div>
+            </td></tr>
         </table>
     </div>
 </div>
