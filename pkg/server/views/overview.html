@@ -63,4 +63,26 @@
         <div class="card-footer"><a href="/vcenter">View vCenters</a></div>
     </div>
 </div>
+
+<div class="detail-section" id="network-usage-section" hx-preserve="true">
+    <h2>Network Usage Over Time</h2>
+    <div class="range-selector">
+        <button class="range-btn" data-range="1h">1h</button>
+        <button class="range-btn" data-range="6h">6h</button>
+        <button class="range-btn active" data-range="24h">24h</button>
+        <button class="range-btn" data-range="7d">7d</button>
+    </div>
+    <div id="network-usage-charts" data-range="24h">
+        <div class="chart-row">
+            <div class="chart-container">
+                <h3>Single-Tenant Networks In Use (%)</h3>
+                <div id="network-st-chart"></div>
+            </div>
+            <div class="chart-container">
+                <h3>Multi-Tenant Networks In Use (%)</h3>
+                <div id="network-mt-chart"></div>
+            </div>
+        </div>
+    </div>
+</div>
 {{end}}

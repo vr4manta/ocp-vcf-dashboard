@@ -37,6 +37,8 @@ All three write to the **Store** (`pkg/store/store.go`), a thread-safe (`sync.RW
 
 The **HTTP server** (`pkg/server/`) renders Go `html/template` pages with HTMX for live updates. Each page has a full-page route, a `/fragments/` route for HTMX partial updates, and an `/api/sse/` endpoint for push. Templates are embedded via `//go:embed views/*.html`.
 
+**Graphs** are JSON endpoints in `pkg/server/graph.go`: `/api/graph/pool/{name}` overlays Prometheus pool allocation (queried via `pkg/prometheus/`, Thanos querier with SA bearer token) against live vSphere cluster demand from govmomi, and `/api/graph/networks` serves per-pool single/multi-tenant network usage sampled into an in-memory ring buffer in the Store every minute (7-day retention). Rendering is client-side uPlot in `static/chart.js`.
+
 Entry point is `cmd/dashboard/main.go` which wires all components together. Config is read from the same ConfigMap/Secrets used by vsphere-capacity-manager-vcenter-ctrl (no separate config needed).
 
 ## Code Conventions

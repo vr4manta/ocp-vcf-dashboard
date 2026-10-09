@@ -244,6 +244,7 @@ func (s *Server) registerRoutes() {
 
 	// Graph API endpoints
 	s.mux.HandleFunc("/api/graph/pool/", s.handlePoolGraph)
+	s.mux.HandleFunc("/api/graph/networks", s.handleNetworkGraph)
 
 	// SSE endpoints
 	s.mux.HandleFunc("/api/sse/", s.handleSSE)

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -90,9 +91,112 @@ func (s *Server) handlePoolGraph(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// NetworkGraphResponse is the JSON response for per-pool network usage graph data.
+type NetworkGraphResponse struct {
+	Range      string              `json:"range"`
+	Timestamps []int64             `json:"timestamps"`
+	Pools      []PoolNetworkSeries `json:"pools"`
+}
+
+// PoolNetworkSeries holds one pool's single/multi-tenant usage series, aligned
+// to the response's shared Timestamps grid.
+type PoolNetworkSeries struct {
+	PoolName        string    `json:"pool_name"`
+	SingleTenantPct []float64 `json:"single_tenant_pct"`
+	MultiTenantPct  []float64 `json:"multi_tenant_pct"`
+}
+
+func (s *Server) handleNetworkGraph(w http.ResponseWriter, r *http.Request) {
+	rangeParam := r.URL.Query().Get("range")
+	if rangeParam == "" {
+		rangeParam = "24h"
+	}
+
+	duration, step, err := parseRange(rangeParam)
+	if err != nil {
+		http.Error(w, "invalid range parameter", http.StatusBadRequest)
+		return
+	}
+
+	now := time.Now()
+	start := now.Add(-duration)
+	stepSec := int64(step.Seconds())
+
+	samples := s.store.GetNetworkUsageHistory(start)
+
+	stPoints := make(map[string][]tsVal)
+	mtPoints := make(map[string][]tsVal)
+	for _, sample := range samples {
+		ts := sample.Timestamp.Unix()
+		for poolName, usage := range sample.Pools {
+			stPoints[poolName] = append(stPoints[poolName], tsVal{ts: ts, val: usage.SingleTenantUsedPct})
+			mtPoints[poolName] = append(mtPoints[poolName], tsVal{ts: ts, val: usage.MultiTenantUsedPct})
+		}
+	}
+
+	poolNames := make(map[string]struct{}, len(stPoints))
+	for name := range stPoints {
+		poolNames[name] = struct{}{}
+	}
+	for name := range mtPoints {
+		poolNames[name] = struct{}{}
+	}
+	names := make([]string, 0, len(poolNames))
+	for name := range poolNames {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	resp := NetworkGraphResponse{Range: rangeParam}
+
+	timestamps := buildGrid(start.Unix(), now.Unix(), stepSec)
+	if timestamps != nil {
+		resp.Timestamps = timestamps
+		tolerance := stepSec / 2
+		if tolerance < 1 {
+			tolerance = 1
+		}
+		for _, name := range names {
+			series := PoolNetworkSeries{PoolName: name}
+			if pts := stPoints[name]; len(pts) > 0 {
+				series.SingleTenantPct = snapToGrid(timestamps, pts, tolerance)
+			}
+			if pts := mtPoints[name]; len(pts) > 0 {
+				series.MultiTenantPct = snapToGrid(timestamps, pts, tolerance)
+			}
+			resp.Pools = append(resp.Pools, series)
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		klog.Errorf("encoding network graph response: %v", err)
+	}
+}
+
 type tsVal struct {
 	ts  int64
 	val float64
+}
+
+// buildGrid generates a regular timestamp grid aligned to step, or nil if the
+// resulting range would be empty.
+func buildGrid(startUnix, endUnix, stepSec int64) []int64 {
+	gridStart := (startUnix / stepSec) * stepSec
+	if gridStart < startUnix {
+		gridStart += stepSec
+	}
+
+	n := int((endUnix-gridStart)/stepSec) + 1
+	if n <= 0 {
+		return nil
+	}
+
+	timestamps := make([]int64, n)
+	for i := range timestamps {
+		timestamps[i] = gridStart + int64(i)*stepSec
+	}
+	return timestamps
 }
 
 // buildSeries generates a regular timestamp grid and snaps both data sources
@@ -102,20 +206,9 @@ func buildSeries(startUnix, endUnix, stepSec int64, pool, cluster []tsVal) Graph
 		return GraphSeries{}
 	}
 
-	// Generate regular timestamp grid aligned to step
-	gridStart := (startUnix / stepSec) * stepSec
-	if gridStart < startUnix {
-		gridStart += stepSec
-	}
-
-	n := int((endUnix-gridStart)/stepSec) + 1
-	if n <= 0 {
+	timestamps := buildGrid(startUnix, endUnix, stepSec)
+	if timestamps == nil {
 		return GraphSeries{}
-	}
-
-	timestamps := make([]int64, n)
-	for i := range timestamps {
-		timestamps[i] = gridStart + int64(i)*stepSec
 	}
 
 	tolerance := stepSec / 2

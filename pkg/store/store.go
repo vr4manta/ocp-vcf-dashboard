@@ -42,6 +42,9 @@ type Store struct {
 	// subscribers receive event types when data changes
 	subMu       sync.Mutex
 	subscribers map[chan EventType]struct{}
+
+	historyMu      sync.Mutex
+	networkHistory []NetworkUsageSample
 }
 
 // New creates a new empty Store.
@@ -230,6 +233,79 @@ func (s *Store) GetNetworks() []*vcmv1.Network {
 	result := make([]*vcmv1.Network, 0, len(s.networks))
 	for _, n := range s.networks {
 		result = append(result, n.DeepCopy())
+	}
+	return result
+}
+
+// --- Network usage history ---
+
+// networkHistoryMaxAge is how long samples are retained, bounding the
+// in-memory ring buffer to support the longest graph range (7d).
+const networkHistoryMaxAge = 7 * 24 * time.Hour
+
+// PoolNetworkUsage holds a single pool's single/multi-tenant network usage
+// percentage at a point in time.
+type PoolNetworkUsage struct {
+	SingleTenantUsedPct float64
+	MultiTenantUsedPct  float64
+}
+
+// NetworkUsageSample is a point-in-time snapshot of every pool's network usage.
+type NetworkUsageSample struct {
+	Timestamp time.Time
+	Pools     map[string]PoolNetworkUsage
+}
+
+// SampleNetworkUsage computes each pool's current single/multi-tenant network
+// usage percentage and appends a snapshot to the in-memory history.
+func (s *Store) SampleNetworkUsage() {
+	s.mu.RLock()
+	pools := make(map[string]PoolNetworkUsage, len(s.pools))
+	for name, p := range s.pools {
+		if p.Spec.Exclude {
+			continue
+		}
+		pools[name] = PoolNetworkUsage{
+			SingleTenantUsedPct: networkUsagePct(p.Status.SingleTenantNetworksTotal, p.Status.SingleTenantNetworksAvailable),
+			MultiTenantUsedPct:  networkUsagePct(p.Status.MultiTenantNetworksTotal, p.Status.MultiTenantNetworksAvailable),
+		}
+	}
+	s.mu.RUnlock()
+	now := time.Now()
+
+	s.historyMu.Lock()
+	s.networkHistory = append(s.networkHistory, NetworkUsageSample{Timestamp: now, Pools: pools})
+	cutoff := now.Add(-networkHistoryMaxAge)
+	i := 0
+	for i < len(s.networkHistory) && s.networkHistory[i].Timestamp.Before(cutoff) {
+		i++
+	}
+	s.networkHistory = s.networkHistory[i:]
+	s.historyMu.Unlock()
+
+	s.notify(EventOverview)
+}
+
+func networkUsagePct(total, available int) float64 {
+	if total == 0 {
+		return 0
+	}
+	return float64(total-available) / float64(total) * 100
+}
+
+// GetNetworkUsageHistory returns network usage samples recorded at or after since.
+func (s *Store) GetNetworkUsageHistory(since time.Time) []NetworkUsageSample {
+	s.historyMu.Lock()
+	defer s.historyMu.Unlock()
+	var result []NetworkUsageSample
+	for _, sample := range s.networkHistory {
+		if !sample.Timestamp.Before(since) {
+			pools := make(map[string]PoolNetworkUsage, len(sample.Pools))
+			for name, usage := range sample.Pools {
+				pools[name] = usage
+			}
+			result = append(result, NetworkUsageSample{Timestamp: sample.Timestamp, Pools: pools})
+		}
 	}
 	return result
 }

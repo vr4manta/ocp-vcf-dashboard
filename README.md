@@ -16,12 +16,12 @@ Updates are pushed to the browser in real-time via Server-Sent Events (SSE) — 
 
 | Page | Description |
 |------|-------------|
-| **Overview** | Summary cards: pool counts, active leases, failing Prow jobs, vCenter status |
-| **Pools** | Pool table with vCPU/memory utilization progress bars, scheduling status |
+| **Overview** | Summary cards: pool counts, active leases, failing Prow jobs, vCenter status; network usage-over-time charts (single/multi-tenant %, 1h–7d ranges) |
+| **Pools** | Pool table with vCPU/memory utilization progress bars, scheduling status; pool detail has CPU/memory usage graphs |
 | **Leases** | Active leases with phase, assigned pools/networks, job links |
 | **Networks** | VLAN allocation, port groups, assignment status |
 | **Prow Jobs** | vSphere periodic job status with sparklines, failure rates, version grouping |
-| **vCenter** | Per-vCenter cluster stats, datastore usage, CI VM inventory |
+| **vCenter** | Per-vCenter cluster stats, datastore usage, CI VM inventory with deep-links into vCenter |
 
 ## Prerequisites
 
@@ -30,6 +30,7 @@ Updates are pushed to the browser in real-time via Server-Sent Events (SSE) — 
 - Go 1.23+ for building
 - `podman` for container builds
 - `oc` CLI for deployment
+- A `cluster-monitoring-view` role binding for Prometheus/Thanos queries (see `config/base/monitoring-clusterrolebinding.yaml`) — without it, the pool allocation series in the graphs will be empty
 
 ## Quick Start
 
@@ -80,6 +81,10 @@ The dashboard reads the **same ConfigMap and Secrets** used by `vsphere-capacity
 | `--config-name` | `vsphere-cleanup-config` | Name of the vCenter configuration ConfigMap |
 | `--prow-poll-interval` | `5m` | How often to refresh Prow job data |
 | `--vcenter-poll-interval` | `5m` | How often to poll vCenter inventory (`0` to disable) |
+| `--console-url` | `https://console-openshift-console.apps.build02.vmc.ci.openshift.org` | OpenShift console base URL for namespace links |
+| `--prometheus-url` | `https://thanos-querier.openshift-monitoring.svc:9091` | Prometheus/Thanos endpoint for pool graphs (`""` to disable) |
+| `--prometheus-token-path` | (SA token) | Bearer token file for Prometheus queries |
+| `--prometheus-skip-tls-verify` | `true` | Skip TLS certificate verification for Prometheus |
 | `--kubeconfig` | (auto) | Path to kubeconfig; uses in-cluster config if empty |
 | `--v` | `0` | klog verbosity level (`2` for periodic status logs) |
 
@@ -97,13 +102,14 @@ The dashboard reads the **same ConfigMap and Secrets** used by `vsphere-capacity
 │  │  Prow Fetcher  ──┼──→ In-Memory Store ──→ SSE Push  │ │
 │  │  vCenter Poller ─┘    (sync.RWMutex)     to browser │ │
 │  │                                                     │ │
-│  │  HTTP Server (Go templates + HTMX)                  │ │
+│  │  HTTP Server (Go templates + HTMX) + Graph API      │ │
 │  └─────────────────────────────────────────────────────┘ │
 │                                                          │
 │  Reads: ConfigMap/vsphere-cleanup-config                 │
 │         Secrets/vcenter-*-credentials                    │
 │         CRDs: Leases, Pools, Networks                    │
 │         External: prow.ci.openshift.org                  │
+│                Thanos querier (Prometheus metrics)       │
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -112,6 +118,7 @@ The dashboard reads the **same ConfigMap and Secrets** used by `vsphere-capacity
 - **CRDs**: Watched in real-time via `client-go` dynamic informers. Changes propagate to the browser within seconds.
 - **Prow**: Fetched from `prow.ci.openshift.org/prowjobs.js` every `--prow-poll-interval`. Filtered to vSphere periodic jobs with OCP version >= 4.12.
 - **vCenter**: Each configured vCenter is polled every `--vcenter-poll-interval` using govmomi. Collects cluster resources, datastore capacity, and CI-related VMs.
+- **Graphs**: `/api/graph/pool/{name}` overlays Prometheus pool allocation with live vSphere cluster demand; `/api/graph/networks` serves per-pool single/multi-tenant network usage sampled into an in-memory ring buffer every minute (7-day retention). Rendered with uPlot on the Overview and pool detail pages.
 
 ### Authentication
 
