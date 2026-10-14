@@ -118,7 +118,7 @@ The dashboard reads the **same ConfigMap and Secrets** used by `vsphere-capacity
 - **CRDs**: Watched in real-time via `client-go` dynamic informers. Changes propagate to the browser within seconds.
 - **Prow**: Fetched from `prow.ci.openshift.org/prowjobs.js` every `--prow-poll-interval`. Filtered to vSphere periodic jobs with OCP version >= 4.12.
 - **vCenter**: Each configured vCenter is polled every `--vcenter-poll-interval` using govmomi. Collects cluster resources, datastore capacity, and CI-related VMs.
-- **Graphs**: `/api/graph/pool/{name}` overlays Prometheus pool allocation with live vSphere cluster demand; `/api/graph/networks` serves per-pool single/multi-tenant network usage sampled into an in-memory ring buffer every minute (7-day retention). Rendered with uPlot on the Overview and pool detail pages.
+- **Graphs**: `/api/graph/pool/{name}` overlays Prometheus pool allocation with live vSphere cluster demand; `/api/graph/networks` serves per-pool single/multi-tenant network usage computed from the `pool_networks_*_by_type` metrics the vsphere-capacity-manager publishes to Prometheus (requires `--prometheus-url`, enabled by default). Rendered with uPlot on the Overview and pool detail pages.
 
 ### Authentication
 

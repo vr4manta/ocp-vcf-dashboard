@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	vcmv1 "github.com/openshift-splat-team/vsphere-capacity-manager/pkg/apis/vspherecapacitymanager.splat.io/v1"
 	"github.com/vmware/govmomi/vim25/types"
 	"k8s.io/klog/v2"
 
@@ -62,6 +63,9 @@ func (s *Server) handlePoolGraph(w http.ResponseWriter, r *http.Request) {
 
 	now := time.Now()
 	start := now.Add(-duration)
+	// Align the window to step boundaries so Prometheus evaluates at round
+	// instants; every range then samples the same wall-clock times.
+	start, now = alignWindow(start, now, step)
 
 	resp := GraphResponse{
 		PoolName:    poolName,
@@ -99,13 +103,17 @@ type NetworkGraphResponse struct {
 }
 
 // PoolNetworkSeries holds one pool's single/multi-tenant usage series, aligned
-// to the response's shared Timestamps grid.
+// to the response's shared Timestamps grid. Null entries mark grid points
+// without data (before the series starts, during gaps, and after it ends).
 type PoolNetworkSeries struct {
-	PoolName        string    `json:"pool_name"`
-	SingleTenantPct []float64 `json:"single_tenant_pct"`
-	MultiTenantPct  []float64 `json:"multi_tenant_pct"`
+	PoolName        string     `json:"pool_name"`
+	SingleTenantPct []*float64 `json:"single_tenant_pct"`
+	MultiTenantPct  []*float64 `json:"multi_tenant_pct"`
 }
 
+// handleNetworkGraph serves per-pool network usage history computed from the
+// metrics the vsphere-capacity-manager publishes to Prometheus
+// (pool_networks_total_by_type / pool_networks_available_by_type).
 func (s *Server) handleNetworkGraph(w http.ResponseWriter, r *http.Request) {
 	rangeParam := r.URL.Query().Get("range")
 	if rangeParam == "" {
@@ -120,21 +128,30 @@ func (s *Server) handleNetworkGraph(w http.ResponseWriter, r *http.Request) {
 
 	now := time.Now()
 	start := now.Add(-duration)
+	// Align the window to step boundaries so Prometheus evaluates at round
+	// instants; every range then samples the same wall-clock times (e.g.
+	// 09:00:00 reads identically on the 1h and the 7d chart).
+	start, now = alignWindow(start, now, step)
 	stepSec := int64(step.Seconds())
 
-	samples := s.store.GetNetworkUsageHistory(start)
-
-	stPoints := make(map[string][]tsVal)
-	mtPoints := make(map[string][]tsVal)
-	for _, sample := range samples {
-		ts := sample.Timestamp.Unix()
-		for poolName, usage := range sample.Pools {
-			stPoints[poolName] = append(stPoints[poolName], tsVal{ts: ts, val: usage.SingleTenantUsedPct})
-			mtPoints[poolName] = append(mtPoints[poolName], tsVal{ts: ts, val: usage.MultiTenantUsedPct})
-		}
+	var stPoints, mtPoints map[string][]tsVal
+	if s.promClient != nil {
+		stPoints, mtPoints = s.queryNetworkUsageMetrics(r.Context(), start, now, step)
 	}
 
-	poolNames := make(map[string]struct{}, len(stPoints))
+	resp := buildNetworkGraphResponse(rangeParam, start.Unix(), now.Unix(), stepSec, stPoints, mtPoints)
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		klog.Errorf("encoding network graph response: %v", err)
+	}
+}
+
+// buildNetworkGraphResponse assembles the shared network graph JSON response
+// from per-pool single/multi-tenant point series, aligned onto a regular grid.
+func buildNetworkGraphResponse(rangeParam string, startUnix, endUnix, stepSec int64, stPoints, mtPoints map[string][]tsVal) NetworkGraphResponse {
+	resp := NetworkGraphResponse{Range: rangeParam}
+
+	poolNames := make(map[string]struct{}, len(stPoints)+len(mtPoints))
 	for name := range stPoints {
 		poolNames[name] = struct{}{}
 	}
@@ -147,9 +164,7 @@ func (s *Server) handleNetworkGraph(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Strings(names)
 
-	resp := NetworkGraphResponse{Range: rangeParam}
-
-	timestamps := buildGrid(start.Unix(), now.Unix(), stepSec)
+	timestamps := buildGrid(startUnix, endUnix, stepSec)
 	if timestamps != nil {
 		resp.Timestamps = timestamps
 		tolerance := stepSec / 2
@@ -159,19 +174,16 @@ func (s *Server) handleNetworkGraph(w http.ResponseWriter, r *http.Request) {
 		for _, name := range names {
 			series := PoolNetworkSeries{PoolName: name}
 			if pts := stPoints[name]; len(pts) > 0 {
-				series.SingleTenantPct = snapToGrid(timestamps, pts, tolerance)
+				series.SingleTenantPct = snapToGridNullable(timestamps, pts, tolerance)
 			}
 			if pts := mtPoints[name]; len(pts) > 0 {
-				series.MultiTenantPct = snapToGrid(timestamps, pts, tolerance)
+				series.MultiTenantPct = snapToGridNullable(timestamps, pts, tolerance)
 			}
 			resp.Pools = append(resp.Pools, series)
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		klog.Errorf("encoding network graph response: %v", err)
-	}
+	return resp
 }
 
 type tsVal struct {
@@ -230,6 +242,37 @@ func buildSeries(startUnix, endUnix, stepSec int64, pool, cluster []tsVal) Graph
 	return series
 }
 
+// advanceToNearest moves the source index forward to the point closest to gt.
+func advanceToNearest(src []tsVal, srcIdx int, gt int64) int {
+	for srcIdx < len(src)-1 {
+		if abs64(src[srcIdx+1].ts-gt) > abs64(src[srcIdx].ts-gt) {
+			break
+		}
+		srcIdx++
+	}
+	return srcIdx
+}
+
+// snapToGridNullable maps source points onto a regular grid, emitting null
+// wherever no source point falls within tolerance of a grid timestamp: before
+// the series starts, during gaps, and after it ends. Missing data must render
+// as a gap rather than a zero or a carried-forward flat line, both of which
+// read as real usage values.
+func snapToGridNullable(grid []int64, src []tsVal, tolerance int64) []*float64 {
+	out := make([]*float64, len(grid))
+	srcIdx := 0
+
+	for i, gt := range grid {
+		srcIdx = advanceToNearest(src, srcIdx, gt)
+		if srcIdx < len(src) && abs64(src[srcIdx].ts-gt) <= tolerance {
+			v := src[srcIdx].val
+			out[i] = &v
+		}
+	}
+
+	return out
+}
+
 // snapToGrid maps irregular source data onto a regular grid using nearest-neighbor.
 // For each grid timestamp, it finds the nearest source point within tolerance.
 // Points outside tolerance get the last known value (step interpolation).
@@ -240,14 +283,7 @@ func snapToGrid(grid []int64, src []tsVal, tolerance int64) []float64 {
 
 	for i, gt := range grid {
 		// Advance source index to the closest point to this grid time
-		for srcIdx < len(src)-1 {
-			currDist := abs64(src[srcIdx].ts - gt)
-			nextDist := abs64(src[srcIdx+1].ts - gt)
-			if nextDist > currDist {
-				break
-			}
-			srcIdx++
-		}
+		srcIdx = advanceToNearest(src, srcIdx, gt)
 
 		if srcIdx < len(src) && abs64(src[srcIdx].ts-gt) <= tolerance {
 			lastVal = src[srcIdx].val
@@ -327,6 +363,70 @@ func (s *Server) queryPoolMetrics(ctx context.Context, poolName string, start, e
 	}
 
 	return cpuPoints, memPoints
+}
+
+// queryNetworkUsageMetrics fetches per-pool single/multi-tenant network usage
+// percentages from the metrics the vsphere-capacity-manager publishes to
+// Prometheus (pool_networks_total_by_type / pool_networks_available_by_type).
+func (s *Server) queryNetworkUsageMetrics(ctx context.Context, start, end time.Time, step time.Duration) (stPoints, mtPoints map[string][]tsVal) {
+	stPoints = make(map[string][]tsVal)
+	mtPoints = make(map[string][]tsVal)
+
+	ns := "vsphere-infra-helpers"
+	labels := fmt.Sprintf(`namespace="%s"`, ns)
+	// Aggregate away instance/pod labels: a VCM pod replacement starts a new
+	// series (new pod name and IP), and without this the dead pod's ended
+	// series and the live one would both come back for long ranges. max by
+	// stitches them into one series per pool and network type, taking the
+	// only (live) series that has samples at each evaluation instant.
+	total := fmt.Sprintf(`max by (namespace, pool, networkType) (pool_networks_total_by_type{%s})`, labels)
+	avail := fmt.Sprintf(`max by (namespace, pool, networkType) (pool_networks_available_by_type{%s})`, labels)
+	query := fmt.Sprintf(`100 * (%s - %s) / %s`, total, avail, total)
+
+	series, err := s.promClient.QueryRangeSeries(ctx, query, start, end, step)
+	if err != nil {
+		klog.V(2).Infof("Prometheus query error for network usage: %v", err)
+		return
+	}
+
+	// Skip pools excluded from scheduling, mirroring the in-pod sampler which
+	// records history only for pools without spec.exclude.
+	excluded := make(map[string]struct{})
+	for _, p := range s.store.GetPools() {
+		if p.Spec.Exclude {
+			excluded[p.Name] = struct{}{}
+		}
+	}
+
+	for _, result := range series {
+		pool := result.Labels["pool"]
+		if pool == "" {
+			continue
+		}
+		if _, skip := excluded[pool]; skip {
+			continue
+		}
+
+		points := make([]tsVal, 0, len(result.Points))
+		for _, p := range result.Points {
+			if math.IsNaN(p.Value) || math.IsInf(p.Value, 0) {
+				continue
+			}
+			points = append(points, tsVal{ts: p.Timestamp, val: p.Value})
+		}
+		if len(points) == 0 {
+			continue
+		}
+
+		switch result.Labels["networkType"] {
+		case string(vcmv1.NetworkTypeSingleTenant):
+			stPoints[pool] = points
+		case string(vcmv1.NetworkTypeMultiTenant):
+			mtPoints[pool] = points
+		}
+	}
+
+	return stPoints, mtPoints
 }
 
 // queryClusterPerfMetrics fetches cluster demand percentages from vSphere QueryPerf.
@@ -421,6 +521,17 @@ func parseRange(r string) (duration time.Duration, step time.Duration, err error
 	default:
 		return 0, 0, fmt.Errorf("unsupported range: %s", r)
 	}
+}
+
+// alignWindow snaps the query window onto step boundaries (floor). Prometheus
+// evaluates a range query at start + k*step, so an aligned window makes every
+// chart range evaluate the same wall-clock instants, and the returned
+// evaluation timestamps coincide exactly with the chart's display grid.
+func alignWindow(start, end time.Time, step time.Duration) (time.Time, time.Time) {
+	stepSec := int64(step.Seconds())
+	alignedStart := (start.Unix() / stepSec) * stepSec
+	alignedEnd := (end.Unix() / stepSec) * stepSec
+	return time.Unix(alignedStart, 0), time.Unix(alignedEnd, 0)
 }
 
 // extractClusterName parses a vSphere compute cluster path and returns the cluster name.

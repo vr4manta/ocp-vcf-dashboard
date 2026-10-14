@@ -61,6 +61,68 @@ func TestQueryRange(t *testing.T) {
 	}
 }
 
+func TestQueryRangeSeries(t *testing.T) {
+	var gotMaxSourceResolution string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMaxSourceResolution = r.URL.Query().Get("max_source_resolution")
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"status": "success",
+			"data": {
+				"resultType": "matrix",
+				"result": [
+					{
+						"metric": {"namespace": "vsphere-infra-helpers", "pool": "pool-a", "networkType": "single-tenant"},
+						"values": [
+							[1700000000, "10"],
+							[1700000600, "20"]
+						]
+					},
+					{
+						"metric": {"namespace": "vsphere-infra-helpers", "pool": "pool-a", "networkType": "multi-tenant"},
+						"values": [
+							[1700000000, "50"],
+							[1700000600, "75"]
+						]
+					},
+					{
+						"metric": {"namespace": "vsphere-infra-helpers", "pool": "pool-b", "networkType": "single-tenant"},
+						"values": []
+					}
+				]
+			}
+		}`))
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "", true)
+
+	start := time.Unix(1700000000, 0)
+	end := time.Unix(1700000600, 0)
+	series, err := client.QueryRangeSeries(context.Background(), "up", start, end, 5*time.Minute)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(series) != 3 {
+		t.Fatalf("expected 3 series, got %d", len(series))
+	}
+	if series[0].Labels["pool"] != "pool-a" || series[0].Labels["networkType"] != "single-tenant" {
+		t.Errorf("unexpected labels on first series: %v", series[0].Labels)
+	}
+	if len(series[1].Points) != 2 {
+		t.Fatalf("expected 2 points on second series, got %d", len(series[1].Points))
+	}
+	if series[1].Points[1].Value != 75 {
+		t.Errorf("expected value 75, got %f", series[1].Points[1].Value)
+	}
+	if len(series[2].Points) != 0 {
+		t.Errorf("expected 0 points on third series, got %d", len(series[2].Points))
+	}
+	if gotMaxSourceResolution != "0s" {
+		t.Errorf("expected max_source_resolution=0s to force raw samples, got %q", gotMaxSourceResolution)
+	}
+}
+
 func TestQueryRangeEmptyResult(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

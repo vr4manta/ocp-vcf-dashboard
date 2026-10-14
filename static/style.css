@@ -516,6 +516,10 @@ a:hover { text-decoration: underline; }
     gap: 16px;
 }
 
+.chart-row-stacked {
+    grid-template-columns: 1fr;
+}
+
 .chart-container {
     min-height: 220px;
 }

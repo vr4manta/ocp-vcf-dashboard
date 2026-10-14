@@ -39,7 +39,7 @@ pkg/server/server.go          HTTP server, routing, template rendering
 pkg/server/sse.go             Server-Sent Events for real-time push
 pkg/server/graph.go           Graph JSON endpoints (pool + network usage time series)
 pkg/server/views/*.html       Go html/template files (embedded via //go:embed)
-pkg/store/store.go            Thread-safe in-memory store, history buffers, change notification
+pkg/store/store.go            Thread-safe in-memory store and change notification
 pkg/vcenter/collector.go      Periodic govmomi data collection
 pkg/vcenter/perfquery.go      Live vSphere performance queries (cluster demand series)
 pkg/vsphere/session.go        vCenter session management (CAPV session wrapper)
@@ -127,7 +127,6 @@ klog.V(2).Infof("Prow refresh: %d jobs", len(j))    // verbose/periodic status
 
 - `sync.RWMutex` for the Store (read-heavy; `RLock` for getters, `Lock` for setters)
 - Explicit `Unlock()` before calling `notify()` — do not use `defer` for setters
-- Separate `historyMu sync.Mutex` guards history buffers (`networkHistory`) so graph reads don't contend with the main store; sample then unlock before `notify()`
 - Per-server `sync.Mutex` in Metadata to avoid head-of-line blocking across vCenters
 - Always `DeepCopy()` CRD objects when storing or returning from the Store
 

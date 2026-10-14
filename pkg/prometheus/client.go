@@ -21,6 +21,12 @@ type TimeSeriesPoint struct {
 	Value     float64 `json:"v"`
 }
 
+// Series is a single labeled result series from a range query.
+type Series struct {
+	Labels map[string]string
+	Points []TimeSeriesPoint
+}
+
 // Client queries Prometheus/Thanos range API with ServiceAccount bearer token auth.
 type Client struct {
 	baseURL    string
@@ -48,11 +54,31 @@ func New(baseURL, tokenPath string, skipTLSVerify bool) *Client {
 
 // QueryRange executes a Prometheus range query and returns the first result series.
 func (c *Client) QueryRange(ctx context.Context, query string, start, end time.Time, step time.Duration) ([]TimeSeriesPoint, error) {
+	series, err := c.QueryRangeSeries(ctx, query, start, end, step)
+	if err != nil {
+		return nil, err
+	}
+	if len(series) == 0 {
+		return nil, nil
+	}
+	return series[0].Points, nil
+}
+
+// QueryRangeSeries executes a Prometheus range query and returns every result
+// series with its labels.
+func (c *Client) QueryRangeSeries(ctx context.Context, query string, start, end time.Time, step time.Duration) ([]Series, error) {
 	params := url.Values{}
 	params.Set("query", query)
 	params.Set("start", strconv.FormatInt(start.Unix(), 10))
 	params.Set("end", strconv.FormatInt(end.Unix(), 10))
 	params.Set("step", strconv.FormatInt(int64(step.Seconds()), 10))
+	// Force raw samples. A Thanos querier with --query.auto-downsampling
+	// derives its source resolution from the step (step/5), which silently
+	// switches coarser queries (e.g. a 30m step) onto downsampled data and
+	// yields values inconsistent with finer ranges. Plain Prometheus ignores
+	// this parameter. Dashboard query windows are at most 7d, within typical
+	// raw retention.
+	params.Set("max_source_resolution", "0s")
 
 	reqURL := fmt.Sprintf("%s/api/v1/query_range?%s", c.baseURL, params.Encode())
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
@@ -80,7 +106,7 @@ func (c *Client) QueryRange(ctx context.Context, query string, start, end time.T
 		return nil, fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(body))
 	}
 
-	return parseMatrixResponse(body)
+	return parseMatrixSeries(body)
 }
 
 func (c *Client) readToken() (string, error) {
@@ -106,7 +132,7 @@ type promMatrixResult struct {
 	Values [][]interface{}   `json:"values"`
 }
 
-func parseMatrixResponse(body []byte) ([]TimeSeriesPoint, error) {
+func parseMatrixSeries(body []byte) ([]Series, error) {
 	var resp promResponse
 	if err := json.Unmarshal(body, &resp); err != nil {
 		return nil, fmt.Errorf("parsing response: %w", err)
@@ -117,11 +143,18 @@ func parseMatrixResponse(body []byte) ([]TimeSeriesPoint, error) {
 	if resp.Data.ResultType != "matrix" {
 		return nil, fmt.Errorf("unexpected result type: %s", resp.Data.ResultType)
 	}
-	if len(resp.Data.Result) == 0 {
-		return nil, nil
-	}
 
-	values := resp.Data.Result[0].Values
+	series := make([]Series, 0, len(resp.Data.Result))
+	for _, result := range resp.Data.Result {
+		series = append(series, Series{
+			Labels: result.Metric,
+			Points: parseValues(result.Values),
+		})
+	}
+	return series, nil
+}
+
+func parseValues(values [][]interface{}) []TimeSeriesPoint {
 	points := make([]TimeSeriesPoint, 0, len(values))
 	for _, pair := range values {
 		if len(pair) != 2 {
@@ -144,5 +177,5 @@ func parseMatrixResponse(body []byte) ([]TimeSeriesPoint, error) {
 			Value:     val,
 		})
 	}
-	return points, nil
+	return points
 }

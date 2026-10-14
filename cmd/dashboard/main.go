@@ -130,23 +130,6 @@ func main() {
 		}
 	}()
 
-	// Sample fleet-wide network usage once a minute for the Overview history
-	// graph. Purely reads already-in-memory pool state, so no poll-interval
-	// flag is warranted.
-	go func() {
-		ticker := time.NewTicker(time.Minute)
-		defer ticker.Stop()
-		dataStore.SampleNetworkUsage()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				dataStore.SampleNetworkUsage()
-			}
-		}
-	}()
-
 	// Start Prow fetcher
 	prowFetcher := prow.NewFetcher(prowPollInterval)
 	go prowFetcher.Run(ctx, func(jobs []prow.JobSummary) {
