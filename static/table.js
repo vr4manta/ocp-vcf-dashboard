@@ -1,8 +1,16 @@
 // table.js — Client-side sorting and filtering for data-table elements.
 // Auto-attaches to all <table class="data-table"> on page load and after
 // HTMX SSE swaps so live-updated tables retain interactive behavior.
+// Sort and filter selections live in a module-level store keyed by page
+// and table position, so they survive SSE swaps (which destroy and
+// recreate the table DOM) instead of resetting on every refresh.
 (function () {
     "use strict";
+
+    // Per-table state keyed by "<pathname>#<tableIndex>". The page itself
+    // is never reloaded by SSE swaps, so entries persist across refreshes
+    // for as long as the page stays open.
+    var tableStates = {};
 
     // parseValue extracts a sortable value from cell text.
     function parseValue(text) {
@@ -14,6 +22,13 @@
 
         // Pure number (including decimals and negatives)
         if (/^-?[\d,]+\.?\d*$/.test(text)) return parseFloat(text.replace(/,/g, ""));
+
+        // Sizes: "16 GB", "512 MB" → bytes (so "8 GB" < "16 GB" numerically)
+        var sizeMatch = text.match(/^([\d.]+)\s*(KB|MB|GB|TB|PB)$/i);
+        if (sizeMatch) {
+            var unitExp = { KB: 1, MB: 2, GB: 3, TB: 4, PB: 5 }[sizeMatch[2].toUpperCase()];
+            return parseFloat(sizeMatch[1]) * Math.pow(1024, unitExp);
+        }
 
         // Duration HH:MM:SS
         if (/^\d{2}:\d{2}:\d{2}$/.test(text)) {
@@ -52,7 +67,10 @@
     }
 
     // initTable attaches sort headers and filter row to a data-table.
-    function initTable(table) {
+    // tableIndex is the table's position among the page's data-tables and
+    // keys its persisted state; it is stable across SSE swaps because the
+    // fragment re-renders the same table layout.
+    function initTable(table, tableIndex) {
         if (table.dataset.tableInit === "1") return;
         table.dataset.tableInit = "1";
 
@@ -65,11 +83,26 @@
         var ths = headerRow.querySelectorAll("th");
         if (ths.length === 0) return;
 
-        // State
-        var sortCol = -1;
-        var sortDir = 0; // 0=none, 1=asc, 2=desc
-        var filters = new Array(ths.length);
-        for (var i = 0; i < filters.length; i++) filters[i] = "";
+        // State — restored from the module-level store so a table recreated
+        // by an SSE swap comes back already sorted and filtered.
+        var stateKey = window.location.pathname + "#" + tableIndex;
+        var state = tableStates[stateKey];
+        if (!state) {
+            state = { sortCol: -1, sortDir: 0, filters: [] };
+            tableStates[stateKey] = state;
+        }
+        // Reset stale state if the column layout changed between renders.
+        if (!Array.isArray(state.filters) || state.filters.length !== ths.length) {
+            state.filters = new Array(ths.length);
+            for (var i = 0; i < state.filters.length; i++) state.filters[i] = "";
+        }
+        if (state.sortCol >= ths.length) {
+            state.sortCol = -1;
+            state.sortDir = 0;
+        }
+        var sortCol = state.sortCol;
+        var sortDir = state.sortDir; // 0=none, 1=asc, 2=desc
+        var filters = state.filters;
 
         // Make headers clickable for sorting
         ths.forEach(function (th, idx) {
@@ -87,6 +120,8 @@
                     sortCol = idx;
                     sortDir = 1;
                 }
+                state.sortCol = sortCol;
+                state.sortDir = sortDir;
                 updateIndicators();
                 applySort();
             });
@@ -102,8 +137,9 @@
             input.className = "column-filter";
             input.placeholder = "Filter...";
             input.setAttribute("aria-label", "Filter " + getCellText(th));
+            if (filters[idx]) input.value = filters[idx];
             input.addEventListener("input", function () {
-                filters[idx] = input.value.toLowerCase();
+                filters[idx] = input.value;
                 applyFilter();
             });
             td.appendChild(input);
@@ -166,7 +202,7 @@
                     var cell = row.children[i];
                     if (!cell) { show = false; break; }
                     var text = getCellText(cell).toLowerCase();
-                    if (text.indexOf(filters[i]) === -1) {
+                    if (text.indexOf(filters[i].toLowerCase()) === -1) {
                         show = false;
                         break;
                     }
@@ -181,6 +217,11 @@
             // Re-sort visible rows
             if (sortDir > 0) applySort();
         }
+
+        // Re-apply restored state to the freshly rendered rows; no-op when
+        // the table has no saved sort or filters.
+        updateIndicators();
+        applyFilter();
     }
 
     // initAll finds and initializes all data-tables in the document.
@@ -195,13 +236,35 @@
         initAll();
     }
 
+    // The SSE swap recreates .table-container elements, which resets their
+    // horizontal scroll position. The SSE extension fires
+    // htmx:sseBeforeMessage immediately before each swap, so capture
+    // scroll positions there and restore them after the swap.
+    var savedScrollLefts = null;
+
+    document.body.addEventListener("htmx:sseBeforeMessage", function () {
+        savedScrollLefts = [];
+        document.querySelectorAll(".table-container").forEach(function (c) {
+            savedScrollLefts.push(c.scrollLeft);
+        });
+    });
+
     // Re-initialize after HTMX SSE swaps replace table content.
     // The SSE swap replaces innerHTML of the container, destroying
     // the old table and creating a new one that needs initialization.
     // Note: we call initAll (not removeAttribute + initTable) so that
     // the data-table-init guard prevents duplicate filter rows when
     // multiple htmx:afterSwap events fire in quick succession.
+    // Everything runs synchronously within the swap task — before the
+    // browser paints — so restored sort/filter/scroll state is applied
+    // without flashing the server-rendered row order first.
     document.body.addEventListener("htmx:afterSwap", function () {
-        setTimeout(initAll, 50);
+        initAll();
+        if (savedScrollLefts) {
+            document.querySelectorAll(".table-container").forEach(function (c, i) {
+                if (i < savedScrollLefts.length) c.scrollLeft = savedScrollLefts[i];
+            });
+            savedScrollLefts = null;
+        }
     });
 })();
